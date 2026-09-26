@@ -1,7 +1,8 @@
 import path from "node:path";
-import {pool} from "../lib/db";
-import fs from 'node:fs'
-  
+import { pool } from "../lib/db";
+import fs from 'node:fs';
+import { logger } from '../lib/logger'
+
 const MIGRATION_DIR = path.join(process.cwd(), "migrations");
 
 const CREATE_MIGRATIONS_TABLE_SQL = `
@@ -13,68 +14,61 @@ const CREATE_MIGRATIONS_TABLE_SQL = `
 `;
 
 type migrationRow = {
-    name : string
+    name: string
 }
 
-
-async function getExecutedMigrations(): Promise<string[]>{
+async function getExecutedMigrations(): Promise<string[]> {
     const result = await pool.query<migrationRow>(
-        "SELECT name FROM migration ORDER BY name"
+        "SELECT name FROM migrations ORDER BY name"
     )
 
-    return result.rows.map((row: migrationRow )=>{
-        row.name
-    })
+    return result.rows.map((row: migrationRow) => row.name);
 }
 
-function  getMigrationFiles(): string[]{
+function getMigrationFiles(): string[] {
     return fs
-    .readdirSync(MIGRATION_DIR)
-    .filter((file)=> file
-    .endsWith('.sql'))
-    .sort();
+        .readdirSync(MIGRATION_DIR)
+        .filter((file) => file.endsWith('.sql'))
+        .sort();
 }
 
-
-async function runMigration(fileName: string):Promise<void>{
-    const sql = fs.readFileSync(path.join(MIGRATION_DIR,fileName),'utf-8')
+async function runMigration(fileName: string): Promise<void> {
+    const sql = fs.readFileSync(path.join(MIGRATION_DIR, fileName), 'utf-8')
     const client = await pool.connect()
 
-    try{
+    try {
         await client.query('BEGIN')
-        await client.qury(sql)
-        await client.query('INSERT INTO migrations (name) values ($1)',[fileName]);
+        await client.query(sql)
+        await client.query('INSERT INTO migrations (name) values ($1)', [fileName]);
         await client.query("COMMIT")
 
         logger.info(`migration completed: ${fileName}`);
-    }catch(error){
+    } catch (error) {
         await client.query('ROLLBACK')
         throw error
-    }finally{
+    } finally {
         client.release()
     }
 }
 
-
-async fuction  migrate(): Promise<void>{
+async function migrate(): Promise<void> {
     await pool.query(CREATE_MIGRATIONS_TABLE_SQL)
     const executed = new Set(await getExecutedMigrations())
-    const pending = getMigrationFiles().filter((file)=> !executed.has(file))
+    const pending = getMigrationFiles().filter((file) => !executed.has(file))
 
-    if(pending.length === 0){
+    if (pending.length === 0) {
         logger.info('no pending migration')
         return
     }
 
-    for (const fileName of pending){
+    for (const fileName of pending) {
         await runMigration(fileName)
     }
 
     logger.info('all migrations completed ! ')
-
 }
 
-migrate().catch((error)=>{
-    logger.error({err: error},"Migrations failed")
+migrate().catch((error) => {
+    logger.error({ err: error }, "Migrations failed")
     process.exit(1)
-}).finally(()=>pool.end());
+}).finally(() => pool.end());
